@@ -729,27 +729,91 @@ window.selPay=function(el,m){
 window.copyPay=()=>{navigator.clipboard.writeText($("payNum").textContent).then(()=>toast("কপি হয়েছে")).catch(()=>{})};
 
 window.placeOrd=async function(){
-const name=$("cName").value.trim(),phone=$("cPhone").value.trim(),div=$("cDiv").value,dist=$("cDist").value,upz=$("cUpz").value,addr=$("cAddr").value.trim(),send=$("cSend").value.trim(),trx=$("cTrx").value.trim();
-if(!cart.length){toast("কার্ট খালি");return}
-if(!name){toast("নাম লিখুন");$("cName").focus();return}
-if(!phone||phone.length<10){toast("সঠিক মোবাইল নম্বর দিন");$("cPhone").focus();return}
-if(!div){toast("বিভাগ সিলেক্ট করুন");return}
-if(!dist){toast("জেলা সিলেক্ট করুন");return}
-if(!upz){toast("উপজেলা সিলেক্ট করুন");return}
-if(!addr||addr.length<5){toast("সম্পূর্ণ ঠিকানা লিখুন");$("cAddr").focus();return}
-if(!curPay){toast("পেমেন্ট মেথড সিলেক্ট করুন");return}
-if(!send||send.length<10){toast("Sender Number দিন (যে নম্বর থেকে টাকা পাঠিয়েছেন)");$("cSend").focus();return}
-if(!trx||trx.length<4){toast("Transaction ID দিন");$("cTrx").focus();return}
-const btn=$("ordBtn");btn.disabled=true;btn.textContent="প্রসেস হচ্ছে...";
-try{const sub=cart.reduce((a,b)=>a+b.price*b.quantity,0),tot=Math.max(0,sub+delCh-disc);
-const data={customerName:name,phone,division:div,district:dist,upazila:upz,address:addr,
-items:cart.map(it=>({productId:it.id,name:it.name,price:it.price,quantity:it.quantity,size:it.size||"",color:it.color||"",imageUrl:it.imageUrl||""})),
-subtotal:sub,deliveryCharge:delCh,discount:disc,coupon:coup,total:tot,paymentMethod:curPay,senderNumber:send,transactionId:trx,
-paymentStatus:curPay==="cod"?"COD Delivery Charge Pending":"Pending",orderStatus:"Pending",createdAt:Date.now(),userId:user?user.uid:null};
-const oref=push(ref(db,"orders"));await set(oref,data);
-for(const it of cart){await runTransaction(ref(db,"products/"+it.id+"/stock"),c=>Math.max(0,Number(c||0)-it.quantity))}
-$("sucId").textContent="#"+oref.key.slice(-8).toUpperCase();closeM("chkM");$("sucM").classList.add("show");cart=[];saveCart()}
-catch(e){console.error(e);toast("ব্যর্থ: "+e.message)}finally{btn.disabled=false;btn.textContent="অর্ডার কনফার্ম"}};
+  const name=$("cName").value.trim();
+  const phone=$("cPhone").value.trim().replace(/\s+/g,"");
+  const div=$("cDiv").value;
+  const dist=$("cDist").value;
+  const upz=$("cUpz").value;
+  const addr=$("cAddr").value.trim();
+  const send=($("cSend")?$("cSend").value:"").trim().replace(/\s+/g,"");
+  const trx=($("cTrx")?$("cTrx").value:"").trim();
+  if(!cart.length){toast("কার্ট খালি");return}
+  if(!name){toast("নাম লিখুন");$("cName").focus();return}
+  if(!phone||phone.length<10){toast("সঠিক মোবাইল নম্বর দিন (01XXXXXXXXX)");$("cPhone").focus();return}
+  if(!div){toast("বিভাগ সিলেক্ট করুন");return}
+  if(!dist){toast("জেলা সিলেক্ট করুন");return}
+  if(!upz){toast("উপজেলা সিলেক্ট করুন");return}
+  if(!addr||addr.length<5){toast("সম্পূর্ণ ঠিকানা লিখুন");$("cAddr").focus();return}
+  if(!curPay){toast("পেমেন্ট মেথড সিলেক্ট করুন (bKash / Nagad / COD)");return}
+  if(!send||send.length<10){toast("Sender Number দিন");if($("cSend"))$("cSend").focus();return}
+  if(!trx||trx.length<3){toast("Transaction ID দিন");if($("cTrx"))$("cTrx").focus();return}
+  const btn=$("ordBtn");
+  btn.disabled=true;
+  btn.textContent="অর্ডার হচ্ছে...";
+  try{
+    const sub=cart.reduce((a,b)=>a+b.price*b.quantity,0);
+    const tot=Math.max(0,sub+delCh-disc);
+    const data={
+      customerName:name,
+      phone:phone,
+      division:div,
+      district:dist,
+      upazila:upz,
+      address:addr,
+      items:cart.map(it=>({
+        productId:it.id,
+        name:it.name,
+        price:it.price,
+        quantity:it.quantity,
+        size:it.size||"",
+        color:it.color||"",
+        imageUrl:it.imageUrl||""
+      })),
+      subtotal:sub,
+      deliveryCharge:delCh,
+      discount:disc,
+      coupon:coup||"",
+      total:tot,
+      paymentMethod:curPay,
+      senderNumber:send,
+      transactionId:trx,
+      paymentStatus:curPay==="cod"?"COD Delivery Charge Pending":"Pending",
+      orderStatus:"Pending",
+      createdAt:Date.now(),
+      userId:user?user.uid:null,
+      userEmail:user?user.email:null
+    };
+    const oref=push(ref(db,"orders"));
+    await set(oref,data);
+    // stock update - fail soft
+    try{
+      for(const it of cart){
+        await runTransaction(ref(db,"products/"+it.id+"/stock"),c=>Math.max(0,Number(c||0)-it.quantity));
+      }
+    }catch(stockErr){console.warn("stock update failed",stockErr)}
+    const orderCode="#"+oref.key.slice(-8).toUpperCase();
+    // save locally for tracking
+    try{
+      const prev=JSON.parse(localStorage.getItem("ssbd_my_orders")||"[]");
+      prev.unshift({id:oref.key,code:orderCode,total:tot,at:Date.now()});
+      localStorage.setItem("ssbd_my_orders",JSON.stringify(prev.slice(0,20)));
+    }catch(_){}
+    $("sucId").textContent=orderCode;
+    closeM("chkM");
+    $("sucM").classList.add("show");
+    cart=[];
+    saveCart();
+    toast("অর্ডার সফল! "+orderCode);
+  }catch(e){
+    console.error("ORDER ERROR",e);
+    let msg=e.message||"অজানা সমস্যা";
+    if(msg.includes("PERMISSION_DENIED")||msg.includes("permission"))msg="অর্ডার সেভ ব্যর্থ — Firebase Rules চেক করুন";
+    toast("অর্ডার ব্যর্থ: "+msg);
+  }finally{
+    btn.disabled=false;
+    btn.textContent="অর্ডার কনফার্ম";
+  }
+};
 
 window.openTrack=()=>{$("trkM").classList.add("show");$("trkRes").innerHTML=""};
 window.doTrack=async()=>{let id=($("trkId").value||"").trim();if(!id){toast("ID দিন");return}
@@ -763,16 +827,26 @@ $("trkRes").innerHTML=`<div class="ocard"><div style="display:flex;justify-conte
 <p style="font-size:12px;margin-top:4px">৳${money(found.total)} · ${esc(found.paymentMethod)}</p>
 <p style="font-size:11px;color:var(--tm);margin-top:4px">${new Date(found.createdAt||0).toLocaleString("bn-BD")}</p></div>`};
 
-window.openMyOrders=async()=>{if(!user){openAuth();return}
-const snap=await get(ref(db,"orders")),all=snap.val()||{};
-const mine=Object.entries(all).filter(([,o])=>o.userId===user.uid).sort((a,b)=>(b[1].createdAt||0)-(a[1].createdAt||0));
-$("profBody").innerHTML=`<h2 style="font-size:16px;font-weight:800;margin-bottom:14px">আমার অর্ডার</h2>
-${mine.length?mine.map(([k,o])=>`<div class="ocard"><div style="display:flex;justify-content:space-between">
-<span style="font-weight:800;color:var(--o)">#${k.slice(-8).toUpperCase()}</span>
-<span class="sbadge ${(o.orderStatus||"pending").toLowerCase()}">${esc(o.orderStatus||"Pending")}</span></div>
-<p style="font-size:12px;margin:4px 0">৳${money(o.total)} · ${esc(o.paymentMethod)}</p>
-<p style="font-size:10px;color:var(--tm)">${new Date(o.createdAt||0).toLocaleString("bn-BD")}</p></div>`).join(""):`<div class="state-msg">কোনো অর্ডার নেই</div>`}`;
-$("profM").classList.add("show")};
+window.openMyOrders=async()=>{
+  if(!user){openAuth();return}
+  try{
+    const snap=await get(ref(db,"orders"));
+    const all=snap.val()||{};
+    const email=(user.email||"").toLowerCase();
+    const mine=Object.entries(all).filter(([,o])=>{
+      if(o.userId&&o.userId===user.uid)return true;
+      if(o.userEmail&&email&&o.userEmail.toLowerCase()===email)return true;
+      return false;
+    }).sort((a,b)=>(b[1].createdAt||0)-(a[1].createdAt||0));
+    $("profBody").innerHTML=`<h2 style="font-size:16px;font-weight:800;margin-bottom:14px">আমার অর্ডার</h2>
+    ${mine.length?mine.map(([k,o])=>`<div class="ocard"><div style="display:flex;justify-content:space-between;align-items:center">
+    <span style="font-weight:800;color:var(--o)">#${k.slice(-8).toUpperCase()}</span>
+    <span class="sbadge ${(o.orderStatus||"pending").toLowerCase()}">${esc(o.orderStatus||"Pending")}</span></div>
+    <p style="font-size:12px;margin:4px 0">৳${money(o.total)} · ${esc(o.paymentMethod||"")}</p>
+    <p style="font-size:10px;color:var(--tm)">${new Date(o.createdAt||0).toLocaleString("bn-BD")}</p></div>`).join(""):`<div class="state-msg">এখনো কোনো অর্ডার নেই</div>`}`;
+    $("profM").classList.add("show");
+  }catch(e){toast("অর্ডার লোড ব্যর্থ: "+e.message)}
+};
 window.openWishlist=()=>{const box=[];wish.forEach(id=>{const p=products[id];if(p)box.push(cardHTML(id,p))});
 $("profBody").innerHTML=`<h2 style="font-size:16px;font-weight:800;margin-bottom:14px">❤️ Wishlist</h2>
 ${box.length?`<div class="pgrid">${box.join("")}</div>`:`<div class="state-msg">খালি</div>`}`;
